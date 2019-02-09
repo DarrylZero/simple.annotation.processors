@@ -1,0 +1,151 @@
+buildscript {
+    repositories {
+        jcenter()
+        maven { url "https://clojars.org/repo" }
+    }
+
+    dependencies {
+        classpath 'org.junit.platform:junit-platform-gradle-plugin:1.0.0'
+        classpath 'com.steammachine.org:gradle.plugins:0.9.3'
+        classpath 'com.steammachine.org:gradle.copy.plugin:0.9.1'
+        classpath 'com.steammachine.org:gradle.substitute.plugin:1.0.0'
+    }
+}
+
+apply plugin: 'java'
+apply plugin: 'idea'
+apply plugin: 'maven'
+apply plugin: 'maven-publish'
+apply plugin: 'org.junit.platform.gradle.plugin'
+apply plugin: 'com.steammachine.org.gradle.properties.plugins'
+apply plugin: 'com.steammachine.org.gradle.copyresources.plugin'
+apply plugin: 'com.steammachine.org.gradle.substitute.plugin'
+
+repositories {
+    mavenLocal()
+    jcenter()
+    maven { url "https://clojars.org/repo" }
+}
+
+auxprops.set('deploy') {
+    propertyFile = file('publish.properties')
+}
+
+idea {
+    module {
+        inheritOutputDirs = false
+        outputDir = file('build/classes/main')
+        testOutputDir = file('build/classes/test')
+    }
+}
+
+group = deploy.group
+version = deploy.version
+
+
+tasks.withType(JavaCompile) {
+    options.encoding = 'UTF-8'
+}
+
+tasks.withType(Test) {
+    systemProperty "file.encoding", "UTF-8"
+}
+
+
+
+dependencies {
+    compile 'com.squareup:javapoet:1.10.0'
+
+    testRuntime 'org.junit.jupiter:junit-jupiter-engine:5.0.0'
+    testCompile 'org.junit.jupiter:junit-jupiter-api:5.0.0'
+    testCompile 'junit:junit:4.12'
+    testCompile 'org.junit.jupiter:junit-jupiter-engine:5.0.0'
+    testCompile 'org.junit.vintage:junit-vintage-engine:4.12.0'
+    testCompile 'org.junit.platform:junit-platform-launcher:1.0.0'
+    testCompile 'com.steammachine.org:junit5.extensions:0.9.1'
+}
+
+jar {
+    manifest {
+        attributes(
+                "Implementation-Title": deploy.title,
+                "Implementation-Version": deploy.version,
+                "Description": deploy.description
+        )
+    }
+}
+
+sourceCompatibility = JavaVersion.VERSION_1_8
+targetCompatibility = JavaVersion.VERSION_1_8
+
+
+junitPlatform {
+    details = 'tree'
+    filters {
+        engines {
+            include 'junit-jupiter'
+            include 'junit-vintage'
+        }
+        tags { exclude 'DebugRun' }
+        includeClassNamePattern '.*Check'
+    }
+}
+
+copyresources.copy('copy_publish_properties') {
+    from 'publish.properties'
+    into new File(project.buildDir, 'classes/test/com/steammachine/jsonchecker/infrastructure')
+}
+
+task sourceJar(type: Jar) {
+    from sourceSets.main.allJava
+    classifier "sources"
+
+    manifest {
+        attributes(
+                "Implementation-Title": deploy.title,
+                "Implementation-Version": deploy.version,
+                "Description": deploy.description
+        )
+    }
+}
+
+def artefacts_publications_user = project.hasProperty('repo_user') ? repo_user : 'repo_user'
+def artefacts_publications_password = project.hasProperty('repo_password') ? repo_password : 'repo_password'
+
+publishing {
+    repositories {
+        maven {
+            credentials {
+                username = artefacts_publications_user
+                password = artefacts_publications_password
+            }
+            url deploy.repository_host
+        }
+    }
+
+    publications {
+        mavenJava(MavenPublication) {
+            groupId deploy.group
+            version deploy.version
+            artifactId deploy.artifact
+
+            from components.java
+            artifact sourceJar
+        }
+    }
+}
+
+task buildandsources(dependsOn: [sourceJar, build]) {}
+
+task tagCommandLine {
+    doLast {
+        println "git checkout release$deploy.version"
+        println "git tag -a v$deploy.version " + " -m \"version $deploy.version\""
+    }
+}
+
+task deploy_help {
+    doLast {
+        println "gradle publish -Prepo_user=<repo user> -Prepo_password=<repo user>"
+    }
+}
