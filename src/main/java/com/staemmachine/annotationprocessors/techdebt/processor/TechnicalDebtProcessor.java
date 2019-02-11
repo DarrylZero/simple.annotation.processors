@@ -76,12 +76,7 @@ public class TechnicalDebtProcessor extends AbstractProcessor {
         return true;
     }
 
-    @Override
-    public SourceVersion getSupportedSourceVersion() {
-        return SourceVersion.latestSupported();
-    }
-
-    private Optional<Instant> getDate(String value) {
+    private static Optional<Instant> getDate(String value) {
         SimpleDateFormat format = new SimpleDateFormat("dd.MM.yyyy");
         Date parsed;
         try {
