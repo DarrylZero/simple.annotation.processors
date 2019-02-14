@@ -10,12 +10,17 @@ import com.squareup.javapoet.TypeSpec;
 import com.staemmachine.annotationprocessors.spicollector.InterfaceToSupport;
 import com.staemmachine.annotationprocessors.spicollector.Registration;
 import com.staemmachine.annotationprocessors.spicollector.annotionons.Collected;
+import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
+import java.io.PrintWriter;
+import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
-import java.util.function.Function;
-import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import javax.annotation.processing.AbstractProcessor;
 import javax.annotation.processing.Filer;
 import javax.annotation.processing.Messager;
@@ -33,6 +38,8 @@ import javax.lang.model.type.TypeMirror;
 import javax.lang.model.util.Elements;
 import javax.lang.model.util.Types;
 import javax.tools.Diagnostic.Kind;
+import javax.tools.FileObject;
+import javax.tools.StandardLocation;
 
 /**
  * {@link CollectedInfoProcessor} https://github.com/square/javapoet
@@ -100,20 +107,21 @@ public class CollectedInfoProcessor extends AbstractProcessor {
 
     @Override
     public boolean process(Set<? extends TypeElement> annotations, RoundEnvironment env) {
-/*
+
+        Class<InterfaceToSupport> classType = InterfaceToSupport.class;
         List<String> annotatedClasses = annotations.stream()
                 .flatMap(typeElement -> env.getElementsAnnotatedWith(typeElement).stream())
                 .filter(element -> element.getAnnotation(Collected.class).enabled())
                 .filter(TypeElement.class::isInstance)
                 .map(TypeElement.class::cast)
+                .filter(typeElement -> isType(typeElement.asType(), classType))
                 .map(TypeElement::getQualifiedName)
                 .map(CharSequence::toString)
-                .collect(Collectors.toList());
+                .collect(toList());
         annotatedClasses.forEach(this::debug);
         annotatedClasses.forEach(this::debug);
-*/
 
-        List<String> generatedClassNames = annotations.stream()
+        List<String> annotatedMethods = annotations.stream()
                 .flatMap(typeElement -> env.getElementsAnnotatedWith(typeElement).stream())
                 .filter(element -> nonNull(element.getAnnotation(Collected.class)))
                 .filter(element -> element.getAnnotation(Collected.class).enabled())
@@ -124,25 +132,59 @@ public class CollectedInfoProcessor extends AbstractProcessor {
                 .filter(ex -> ex.getModifiers().contains(Modifier.STATIC))
                 .filter(ex -> !ex.getModifiers().contains(Modifier.ABSTRACT))
                 .filter(i -> DeclaredType.class.isInstance(i.getReturnType()))
-                .filter(i -> isType(DeclaredType.class.cast(i.getReturnType()).asElement().asType(),
-                        InterfaceToSupport.class))
+                .filter(i -> isType(i.getReturnType(), classType))
                 .map(CollectedInfoProcessor::methodInfo)
                 .map(CollectedInfoProcessor::createClass)
-                .map(new Function<JavaFile, String>() {
-                    @Override
-                    public String apply(JavaFile javaFile) {
-                        try {
-                            javaFile.writeTo(filer);
-                        } catch (IOException e) {
-                            e.printStackTrace();
-                        }
-                        return javaFile.toJavaFileObject().getName();
-                    }
-                }).collect(toList());
+                .map(this::writeFile)
+                .collect(toList());
 
-        generatedClassNames.forEach(System.out::println);
+        List<String> allFiles = Stream.of(annotatedClasses, annotatedMethods)
+                .flatMap(Collection::stream).collect(toList());
+
+        allFiles.forEach(s -> System.out.println(">>>>" + s));
+
+        try {
+            FileObject f = filer.getResource(StandardLocation.CLASS_OUTPUT, "",
+                    "META-INF/services/" + InterfaceToSupport.class.getName());
+            File file = new File(f.toUri());
+            messager.printMessage(Kind.NOTE,
+                    "File " +  file.getAbsolutePath() + " exists ");
+            file.delete();
+
+
+        } catch (FileNotFoundException x) {
+            // file doesn't exist
+        } catch (IOException e) {
+            messager.printMessage(Kind.ERROR,
+                    "Failed to load existing service definition files: " + e);
+        }
+
+        try {
+            processingEnv.getMessager()
+                    .printMessage(Kind.NOTE, "Writing META-INF/services/" + classType.getName());
+            FileObject f = filer.createResource(StandardLocation.CLASS_OUTPUT, "",
+                    "META-INF/services/" + classType.getName());
+            try (PrintWriter printWriter = new PrintWriter(
+                    new OutputStreamWriter(f.openOutputStream(), "UTF-8"))) {
+                allFiles.forEach(printWriter::println);
+            }
+        } catch (IOException x) {
+            processingEnv.getMessager()
+                    .printMessage(Kind.ERROR, "Failed to write service definition files: " + x);
+        }
 
         return true;
+    }
+
+    private String writeFile(JavaFile file) {
+        try {
+            file.writeTo(filer);
+            return (file.packageName.isEmpty() ? "" : file.packageName + ".") + file.typeSpec.name;
+        } catch (IOException e) {
+            throw new IllegalStateException(e);
+        }
+
+
     }
 
     private static MethodInfo methodInfo(ExecutableElement method) {
@@ -165,12 +207,12 @@ public class CollectedInfoProcessor extends AbstractProcessor {
                 .addModifiers(Modifier.PUBLIC)
                 .build();
 
-
         MethodSpec factoryMethod = MethodSpec.methodBuilder("getInterface")
                 .addModifiers(Modifier.PUBLIC)
                 .returns(InterfaceToSupport.class)
                 .addAnnotation(Override.class)
-                .addStatement("return $N.$N()", methodInfo.getClassName(), methodInfo.getMethodName())
+                .addStatement("return $N.$N()", methodInfo.getClassName(),
+                        methodInfo.getMethodName())
                 .build();
 
         String className =
